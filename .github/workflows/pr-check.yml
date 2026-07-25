@@ -1,0 +1,103 @@
+name: PR Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  typecheck-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install shared dependencies
+        run: bun install
+        working-directory: shared
+      - name: Install backend dependencies
+        run: bun install
+        working-directory: backend
+      - name: Typecheck
+        run: bun tsc --noEmit
+        working-directory: backend
+
+  typecheck-shared:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install shared dependencies
+        run: bun install
+        working-directory: shared
+      - name: Typecheck
+        run: bunx tsc --noEmit
+        working-directory: shared
+
+  lint-and-build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install frontend dependencies
+        run: bun install
+        working-directory: frontend
+      - name: Lint
+        run: bun run lint
+        working-directory: frontend
+      - name: Build
+        run: bun run build
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: typecheck-backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: eco
+          POSTGRES_PASSWORD: eco
+          POSTGRES_DB: eco-fetch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install shared dependencies
+        run: bun install
+        working-directory: shared
+      - name: Install backend dependencies
+        run: bun install
+        working-directory: backend
+      - name: Push DB schema
+        run: bun drizzle-kit push
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://eco:eco@localhost:5432/eco-fetch
+      - name: Start server and smoke test
+        run: |
+          bun run src/index.ts &
+          sleep 3
+          curl -f http://localhost:4000/api/health
+          curl -f -X POST http://localhost:4000/api/context -H "Content-Type: application/json" -d '{"clientNetwork":{"bandwidth":8,"rtt":20}}'
+          curl -f "http://localhost:4000/api/images/proxy?url=https://picsum.photos/id/1/1200/800&level=3"
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://eco:eco@localhost:5432/eco-fetch
+          PORT: 4000
